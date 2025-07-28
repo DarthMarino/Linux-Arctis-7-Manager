@@ -15,22 +15,26 @@ fi
 # Files to install
 bin_files=("dist/arctis-manager" "dist/arctis-manager-launcher")
 systemd_service_file="systemd/arctis-manager.service"
+systemd_path_file="systemd/arctis-manager.path"
+systemd_restart_file="systemd/arctis-manager-restart.service"
 udev_rules_file="udev/91-steelseries-arctis.rules"
 desktop_file="ArctisManager.desktop"
 icon_file="arctis_manager/images/steelseries_logo.svg"
 
 # Install directories
 applications_dir="${chroot_path}${install_prefix}/share/applications/"
-icons_dir="${chroot_path}/usr/share/icons/hicolor/scalable/apps/"
+icons_dir="${chroot_path}${install_prefix}/share/icons/hicolor/scalable/apps/"
 bin_dir="${chroot_path}${install_prefix}/bin"
-udev_dir="${chroot_path}/usr/lib/udev/rules.d/"
-systemd_dir="${chroot_path}/usr/lib/systemd/user/"
+udev_dir="${chroot_path}/etc/udev/rules.d/"
+systemd_dir="${chroot_path}${HOME}/.config/systemd/user/"
 
 function superuserdo() {
     if [ "${chroot_path}" != "" ]; then
         $@
-    else
+    elif [[ "$1" == *"${udev_dir}"* ]]; then
         sudo $@
+    else
+        $@
     fi
 }
 
@@ -64,22 +68,31 @@ function install() {
 
     # Udev rules
     echo "Installing udev rules."
-    superuserdo mkdir -p "${udev_dir}"
-    superuserdo cp "${udev_rules_file}" "${udev_dir}"
     if [ "${chroot_path}" == "" ]; then
-        superuserdo udevadm control --reload
-        superuserdo udevadm trigger
+        echo "Note: udev rules require sudo to install to /etc/udev/rules.d/"
+        sudo mkdir -p "${udev_dir}"
+        sudo cp "${udev_rules_file}" "${udev_dir}"
+        sudo udevadm control --reload
+        sudo udevadm trigger
+    else
+        superuserdo mkdir -p "${udev_dir}"
+        superuserdo cp "${udev_rules_file}" "${udev_dir}"
     fi
 
     # SystemD service
     echo "Installing and enabling systemd user service."
     if [ "${chroot_path}" == "" ]; then
         systemctl --user disable --now "$(basename ${systemd_service_file})" 2>/dev/null
+        systemctl --user disable --now "$(basename ${systemd_path_file})" 2>/dev/null
     fi
-    superuserdo mkdir -p "${systemd_dir}"
-    superuserdo cp "${systemd_service_file}" "${systemd_dir}"
+    mkdir -p "${systemd_dir}"
+    cp "${systemd_service_file}" "${systemd_dir}"
+    cp "${systemd_path_file}" "${systemd_dir}"
+    cp "${systemd_restart_file}" "${systemd_dir}"
     if [ "${chroot_path}" == "" ]; then
+        systemctl --user daemon-reload
         systemctl --user enable --now "$(basename ${systemd_service_file})"
+        systemctl --user enable --now "$(basename ${systemd_path_file})"
     fi
 }
 

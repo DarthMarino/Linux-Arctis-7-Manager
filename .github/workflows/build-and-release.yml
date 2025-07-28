@@ -1,0 +1,281 @@
+name: Build and Release Packages
+
+# DISABLED: Uncomment the 'on' section below when ready to enable automated builds
+# on:
+#   push:
+#     branches: [ main ]
+#     paths:
+#       - 'VERSION.ini'
+#       - 'arctis_manager.py'
+#       - 'arctis_manager/**'
+#       - 'systemd/**'
+#       - 'udev/**'
+#       - 'debian/**'
+#       - '*.yml'
+#       - '*.spec'
+#   workflow_dispatch:
+#     inputs:
+#       force_build:
+#         description: 'Force build even if version unchanged'
+#         required: false
+#         default: false
+#         type: boolean
+
+# Manual trigger only for now
+on:
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build even if version unchanged'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      version_changed: ${{ steps.version.outputs.changed }}
+      should_build: ${{ steps.should_build.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Get current version
+        id: version
+        run: |
+          if [[ -f "VERSION.ini" ]]; then
+            VERSION=$(grep -E "^version\s*=" VERSION.ini | sed 's/.*=\s*//' | tr -d '"' | tr -d "'")
+          else
+            VERSION="1.0.0"
+            echo "version=1.0.0" > VERSION.ini
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # Check if version changed compared to latest release
+          LATEST_RELEASE=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null | sed 's/^v//' || echo "0.0.0")
+          
+          if [[ "$VERSION" != "$LATEST_RELEASE" ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Version changed from $LATEST_RELEASE to $VERSION"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Version unchanged: $VERSION"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Should build?
+        id: should_build
+        run: |
+          if [[ "${{ steps.version.outputs.changed }}" == "true" || "${{ github.event.inputs.force_build }}" == "true" ]]; then
+            echo "result=true" >> $GITHUB_OUTPUT
+          else
+            echo "result=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-flatpak:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:39
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf update -y
+          dnf install -y flatpak flatpak-builder git python3-pip python3-pipenv
+
+      - uses: actions/checkout@v4
+
+      - name: Setup Flatpak
+        run: |
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y flathub org.kde.Platform//6.7 org.kde.Sdk//6.7
+
+      - name: Update version in manifest
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          # Update any version references in the manifest if needed
+          sed -i "s/version: .*/version: $VERSION/" io.github.DarthMarino.ArctisManager.yml || true
+
+      - name: Build Flatpak
+        run: |
+          flatpak-builder --force-clean --install-deps-from=flathub --repo=repo build-dir io.github.DarthMarino.ArctisManager.yml
+          flatpak build-bundle repo arctis-manager-${{ needs.check-version.outputs.version }}.flatpak io.github.DarthMarino.ArctisManager
+
+      - name: Upload Flatpak artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-package
+          path: arctis-manager-${{ needs.check-version.outputs.version }}.flatpak
+
+  build-debian:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debhelper-compat python3-dev python3-pip python3-venv \
+                                  python3-setuptools python3-wheel dh-python build-essential
+
+      - name: Setup Python environment
+        run: |
+          python3 -m pip install --upgrade pip pipenv
+          python3 -m pipenv install --deploy
+
+      - name: Update version in debian files
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          
+          # Update debian/changelog
+          cat > debian/changelog << EOF
+          arctis-manager ($VERSION-1) unstable; urgency=medium
+
+            * Automated release for version $VERSION
+            * $(git log --oneline -1 --pretty=format:"%s")
+
+           -- GitHub Actions <noreply@github.com>  $(date -R)
+
+          EOF
+          
+          # Append previous changelog if it exists
+          if [[ -f debian/changelog.bak ]]; then
+            echo "" >> debian/changelog
+            cat debian/changelog.bak >> debian/changelog
+          fi
+
+      - name: Build PyInstaller binaries
+        run: |
+          # Build with PyInstaller
+          python3 -m pipenv run pyinstaller arctis-manager.spec
+          python3 -m pipenv run pyinstaller arctis-manager-launcher.spec
+
+      - name: Build Debian package
+        run: |
+          # Build debian package
+          dpkg-buildpackage -us -uc -b
+
+      - name: Upload Debian artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: debian-package
+          path: ../arctis-manager*.deb
+
+  build-rpm:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:39
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf update -y
+          dnf install -y rpm-build rpmdevtools python3-pip python3-pipenv wget bash
+
+      - uses: actions/checkout@v4
+
+      - name: Setup RPM build environment
+        run: |
+          rpmdev-setuptree
+          cp package_managers/ArctisManager.spec ~/rpmbuild/SPECS/
+          tar czf ~/rpmbuild/SOURCES/arctis-manager-${{ needs.check-version.outputs.version }}.tar.gz .
+
+      - name: Build RPM
+        run: |
+          cd ~/rpmbuild/SPECS
+          rpmbuild -ba ArctisManager.spec \
+            --define "_version ${{ needs.check-version.outputs.version }}" \
+            --define "_localbuild 1" \
+            --define "_sourcedir ~/rpmbuild/SOURCES"
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-package
+          path: ~/rpmbuild/RPMS/x86_64/arctis-manager*.rpm
+
+  create-release:
+    needs: [check-version, build-flatpak, build-debian, build-rpm]
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.check-version.outputs.version }}
+          name: Release v${{ needs.check-version.outputs.version }}
+          body: |
+            ## Linux-Arctis-7-Manager v${{ needs.check-version.outputs.version }}
+            
+            ### Installation Options
+            
+            **Flatpak (Recommended)**:
+            ```bash
+            # Download and install
+            wget https://github.com/DarthMarino/Linux-Arctis-7-Manager/releases/download/v${{ needs.check-version.outputs.version }}/arctis-manager-${{ needs.check-version.outputs.version }}.flatpak
+            flatpak install arctis-manager-${{ needs.check-version.outputs.version }}.flatpak
+            
+            # Run
+            flatpak run io.github.DarthMarino.ArctisManager
+            ```
+            
+            **Debian/Ubuntu**:
+            ```bash
+            # Download and install
+            wget https://github.com/DarthMarino/Linux-Arctis-7-Manager/releases/download/v${{ needs.check-version.outputs.version }}/arctis-manager_${{ needs.check-version.outputs.version }}-1_amd64.deb
+            sudo dpkg -i arctis-manager_${{ needs.check-version.outputs.version }}-1_amd64.deb
+            sudo apt-get install -f  # Fix any dependency issues
+            ```
+            
+            **Fedora/RHEL**:
+            ```bash
+            # Download and install
+            wget https://github.com/DarthMarino/Linux-Arctis-7-Manager/releases/download/v${{ needs.check-version.outputs.version }}/arctis-manager-${{ needs.check-version.outputs.version }}-1.fc39.x86_64.rpm
+            sudo dnf install arctis-manager-${{ needs.check-version.outputs.version }}-1.fc39.x86_64.rpm
+            ```
+            
+            ### Supported Devices
+            - SteelSeries Arctis 7+ (and variants: PS5, XBOX, Destiny)
+            - SteelSeries Arctis Nova Pro Wireless (and X variant)
+            
+            ### Changes in this release
+            ${{ github.event.head_commit.message }}
+            
+            ---
+            
+            **Need help?** Check the [README](https://github.com/DarthMarino/Linux-Arctis-7-Manager/blob/main/README.md) for installation and usage instructions.
+          files: |
+            flatpak-package/*
+            debian-package/*
+            rpm-package/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  submit-to-flathub:
+    needs: [check-version, build-flatpak]
+    if: needs.check-version.outputs.should_build == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify about Flathub submission
+        run: |
+          echo "::notice::New version ${{ needs.check-version.outputs.version }} built successfully!"
+          echo "::notice::To submit to Flathub, create a PR to https://github.com/flathub/io.github.DarthMarino.ArctisManager"
+          echo "::notice::Or set up automatic Flathub submission with a bot account and repository"

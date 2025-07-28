@@ -1,0 +1,8 @@
+[Unit]
+Description=Restart Arctis Manager Service
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl --user restart arctis-manager.service
+RemainAfterExit=no

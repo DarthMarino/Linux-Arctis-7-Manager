@@ -1,5 +1,11 @@
 # Linux-Arctis-Manager
 
+## Service Context
+
+**Service Name:** Linux-Arctis-Manager (arctis-manager)  
+**Purpose:** A lightweight Linux alternative to SteelSeries Engine/GG software for managing SteelSeries Arctis headsets. Provides system tray integration, device settings management, ChatMix functionality, and hardware control through USB communication.  
+**Operating System:** Designed for Linux distributions, tested and optimized for Bazzite (Fedora-based immutable gaming OS) and other modern Linux systems with PulseAudio/systemd support.
+
 ## Important Licensing Notice
 
 `Linux-Arctis-Manager` is under the GPLv3 license. While the GPL license does permit commercial use, it is **strongly discouraged** to reuse the work herein for any for-profit purpose as it relates to the usage of a third party proprietary hardware device.

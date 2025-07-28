@@ -1,0 +1,51 @@
+Source: arctis-manager
+Section: utils
+Priority: optional
+Maintainer: DarthMarino <https://github.com/DarthMarino>
+Build-Depends: debhelper-compat (= 13),
+               python3,
+               python3-pip,
+               python3-venv,
+               python3-setuptools,
+               python3-wheel,
+               dh-python
+Standards-Version: 4.6.0
+Homepage: https://github.com/DarthMarino/Linux-Arctis-7-Manager
+Vcs-Browser: https://github.com/DarthMarino/Linux-Arctis-7-Manager
+Vcs-Git: https://github.com/DarthMarino/Linux-Arctis-7-Manager.git
+
+Package: arctis-manager
+Architecture: amd64
+Depends: ${misc:Depends},
+         ${python3:Depends},
+         bash,
+         pulseaudio-utils,
+         libglvnd0,
+         libxcb1,
+         libxcb-util1,
+         libxcb-cursor0,
+         libxcb-keysyms1,
+         libx11-xcb1,
+         libxcb-xinerama0,
+         libxkbcommon-x11-0,
+         libfontconfig1,
+         libegl1,
+         libglx0,
+         libglib2.0-0,
+         systemd,
+         udev
+Description: SteelSeries Arctis device manager for Linux
+ Linux-Arctis-Manager is a lightweight Linux alternative to SteelSeries 
+ Engine/GG software for managing SteelSeries Arctis headsets. It provides 
+ system tray integration, device settings management, ChatMix functionality, 
+ and hardware control through USB communication.
+ .
+ Features:
+  - System tray integration with device status
+  - ChatMix volume control for supported devices
+  - Hardware settings management (ANC, side-tone, etc.)
+  - Automatic device detection and configuration
+  - Support for Arctis 7+, Nova Pro Wireless, and variants
+ .
+ This package is designed for Linux distributions with PulseAudio/systemd
+ support and has been optimized for modern gaming-focused distributions.

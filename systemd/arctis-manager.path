@@ -1,0 +1,10 @@
+[Unit]
+Description=Arctis Device Detection Path
+After=graphical-session.target
+
+[Path]
+PathExists=/dev/steelseries/arctis
+Unit=arctis-manager-restart.service
+
+[Install]
+WantedBy=graphical-session.target

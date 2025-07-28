@@ -1,0 +1,17 @@
+arctis-manager (1.6.4-1) unstable; urgency=medium
+
+  * Version bump to 1.6.4
+  * See GitHub releases for detailed changelog
+
+ -- DarthMarino <https://github.com/DarthMarino>  Mon, 28 Jul 2025 17:30:42 -0400
+
+arctis-manager (1.6.1-1) unstable; urgency=medium
+
+  * Initial Debian packaging of Linux-Arctis-Manager
+  * SteelSeries GG software replacement for Linux
+  * Support for Arctis 7+, Nova Pro Wireless devices
+  * System tray integration and ChatMix functionality
+  * Automatic device detection and configuration
+  * udev rules and systemd user service integration
+
+ -- DarthMarino <https://github.com/DarthMarino>  Mon, 28 Jul 2025 12:00:00 +0000

@@ -1,0 +1,56 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+export PYBUILD_NAME = arctis-manager
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_auto_clean:
+	rm -rf build/ dist/ *.egg-info/
+	find . -name "*.pyc" -delete
+	find . -name "__pycache__" -delete
+
+override_dh_auto_build:
+	# Install Python dependencies in virtual environment
+	python3 -m pip install --user pipenv
+	python3 -m pipenv install --system --deploy
+	# Build with PyInstaller
+	python3 -m pipenv run pyinstaller arctis-manager.spec
+	python3 -m pipenv run pyinstaller arctis-manager-launcher.spec
+
+override_dh_auto_install:
+	# Create necessary directories
+	mkdir -p debian/arctis-manager/usr/local/bin
+	mkdir -p debian/arctis-manager/usr/local/share/applications
+	mkdir -p debian/arctis-manager/usr/share/icons/hicolor/scalable/apps
+	mkdir -p debian/arctis-manager/etc/udev/rules.d
+	mkdir -p debian/arctis-manager/usr/lib/systemd/user
+	
+	# Install binaries
+	install -m 755 dist/arctis-manager debian/arctis-manager/usr/local/bin/
+	install -m 755 dist/arctis-manager-launcher debian/arctis-manager/usr/local/bin/
+	
+	# Install desktop file
+	install -m 644 ArctisManager.desktop debian/arctis-manager/usr/local/share/applications/
+	
+	# Install icon
+	install -m 644 arctis_manager/images/steelseries_logo.svg debian/arctis-manager/usr/share/icons/hicolor/scalable/apps/arctis_manager.svg
+	
+	# Install udev rules
+	install -m 644 udev/91-steelseries-arctis.rules debian/arctis-manager/etc/udev/rules.d/
+	
+	# Install systemd user services
+	install -m 644 systemd/arctis-manager.service debian/arctis-manager/usr/lib/systemd/user/
+	install -m 644 systemd/arctis-manager.path debian/arctis-manager/usr/lib/systemd/user/
+	install -m 644 systemd/arctis-manager-restart.service debian/arctis-manager/usr/lib/systemd/user/
+
+override_dh_systemd_enable:
+	# Enable systemd user services
+	dh_systemd_enable --user arctis-manager.service
+	dh_systemd_enable --user arctis-manager.path
+
+override_dh_systemd_start:
+	# Start systemd user services
+	dh_systemd_start --user arctis-manager.service
+	dh_systemd_start --user arctis-manager.path
