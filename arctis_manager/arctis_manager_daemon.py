@@ -7,6 +7,7 @@ import pkgutil
 import re
 import subprocess
 import sys
+import time
 from typing import Callable
 
 import usb.core
@@ -87,24 +88,44 @@ class ArctisManagerDaemon:
         self.cleanup_pulseaudio_nodes()
 
         default_sink = None
+        max_retries = 15
+        retry_delay = 1.0
 
-        self.log.debug('Getting Arctis sink.')
-        try:
-            pactl_short_sinks = os.popen("pactl list short sinks").readlines()
-            # grab any elements from list of pactl sinks that are Arctis
-            arctis = re.compile('.*[aA]rctis.*')
-            arctis_sink = list(filter(arctis.match, pactl_short_sinks))[0]
+        self.log.debug('Getting Arctis sink with retry logic.')
+        
+        for attempt in range(max_retries):
+            self.log.debug(f'PulseAudio sink detection attempt {attempt + 1}/{max_retries}')
+            
+            try:
+                pactl_short_sinks = os.popen("pactl list short sinks").readlines()
+                # grab any elements from list of pactl sinks that are Arctis
+                arctis = re.compile('.*[aA]rctis.*')
+                arctis_sinks = list(filter(arctis.match, pactl_short_sinks))
+                
+                if arctis_sinks:
+                    arctis_sink = arctis_sinks[0]
+                    # split the arctis line on tabs (which form table given by 'pactl short sinks')
+                    tabs_pattern = re.compile(r'\t')
+                    tabs_re = re.split(tabs_pattern, arctis_sink)
 
-            # split the arctis line on tabs (which form table given by 'pactl short sinks')
-            tabs_pattern = re.compile(r'\t')
-            tabs_re = re.split(tabs_pattern, arctis_sink)
-
-            # skip first element of tabs_re (sink's ID which is not persistent)
-            arctis_device = tabs_re[1]
-            self.log.debug(f"Arctis sink identified as {arctis_device}")
-            default_sink = arctis_device
-        except Exception as e:
-            self.log.error('Failed to get default sink.', exc_info=True)
+                    # skip first element of tabs_re (sink's ID which is not persistent)
+                    arctis_device = tabs_re[1]
+                    self.log.debug(f"Arctis sink identified as {arctis_device}")
+                    default_sink = arctis_device
+                    break
+                else:
+                    self.log.debug('No Arctis sink found in PulseAudio')
+                    
+            except Exception as e:
+                self.log.debug(f'Failed to get Arctis sink: {e}')
+            
+            if attempt < max_retries - 1:
+                self.log.debug(f'Arctis sink not found, retrying in {retry_delay} seconds...')
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 1.2, 5.0)  # Exponential backoff, max 5s
+        
+        if default_sink is None:
+            self.log.error(f'Failed to find Arctis sink after {max_retries} attempts. Audio subsystem may not be ready.')
             sys.exit(102)
 
         # Create the game and chat nodes
@@ -140,8 +161,21 @@ class ArctisManagerDaemon:
             try:
                 for position in self.device_manager.get_audio_position():
                     pos_name = position.value
+                    link_cmd = f'pw-link "{node}:monitor_{pos_name}" "{default_sink}:playback_{pos_name}"'
                     self.log.debug(f'Setting "{node}:monitor_{pos_name}" > "{default_sink}:playback_{pos_name}"')
-                    os.system(f'pw-link "{node}:monitor_{pos_name}" "{default_sink}:playback_{pos_name}" 1>/dev/null')
+                    
+                    # Execute command and check return code
+                    result = os.system(link_cmd)
+                    if result != 0:
+                        self.log.warning(f'PipeWire link command failed with code {result}: {link_cmd}')
+                        # Try to verify the link exists anyway
+                        verify_result = os.system(f'pw-link -l | grep -q "{node}:monitor_{pos_name}.*{default_sink}:playback_{pos_name}"')
+                        if verify_result != 0:
+                            self.log.error(f'Failed to create PipeWire link: {node}:monitor_{pos_name} -> {default_sink}:playback_{pos_name}')
+                        else:
+                            self.log.debug(f'PipeWire link verified: {node}:monitor_{pos_name} -> {default_sink}:playback_{pos_name}')
+                    else:
+                        self.log.debug(f'PipeWire link created successfully: {node}:monitor_{pos_name} -> {default_sink}:playback_{pos_name}')
             except Exception as e:
                 self.log.error(f'Failed to set {node}\'s audio positions.', exc_info=True)
                 sys.exit(104)
@@ -197,25 +231,40 @@ class ArctisManagerDaemon:
         self.log.info('Registering supported devices.')
         self.load_device_managers()
 
-        # Identify the (first) compatible device
+        # Identify the (first) compatible device with retry logic
         self.log.debug('Identifying Arctis device.')
-        for manager in self.device_managers:
-            try:
-                self.device = usb.core.find(idVendor=manager.get_device_vendor_id(), idProduct=manager.get_device_product_id())
-                if self.device is not None:
-                    self.device_manager = manager
-                    # very important, otherwise the manager won't be able to communicate to the device at init stage
-                    self.device_manager.set_device(self.device)
-                    # Detach the kernel drivers for the interfaces we need to access in I/O (otherwise the interface will be busy and we'll not be able to read/write into them)
-                    self.device_manager.kernel_detach()
-                    self.log.info(f'Identified device: {self.device_manager.get_device_name()}.')
-                    break
-            except Exception as e:
-                self.log.error(f'Failed to identify device: {manager.get_device_name()} ({e}).')
-                self.device = None
+        self.device = None
+        max_retries = 10
+        retry_delay = 1.0
+        
+        for attempt in range(max_retries):
+            self.log.debug(f'USB device detection attempt {attempt + 1}/{max_retries}')
+            
+            for manager in self.device_managers:
+                try:
+                    self.device = usb.core.find(idVendor=manager.get_device_vendor_id(), idProduct=manager.get_device_product_id())
+                    if self.device is not None:
+                        self.device_manager = manager
+                        # very important, otherwise the manager won't be able to communicate to the device at init stage
+                        self.device_manager.set_device(self.device)
+                        # Detach the kernel drivers for the interfaces we need to access in I/O (otherwise the interface will be busy and we'll not be able to read/write into them)
+                        self.device_manager.kernel_detach()
+                        self.log.info(f'Identified device: {self.device_manager.get_device_name()}.')
+                        break
+                except Exception as e:
+                    self.log.debug(f'Failed to identify device: {manager.get_device_name()} ({e}).')
+                    self.device = None
+            
+            if self.device is not None:
+                break
+                
+            if attempt < max_retries - 1:
+                self.log.debug(f'USB device not found, retrying in {retry_delay} seconds...')
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 1.5, 10.0)  # Exponential backoff, max 10s
 
         if self.device is None:
-            self.log.error(f'''Failed to identify the Arctis device. Please ensure it is connected.
+            self.log.error(f'''Failed to identify the Arctis device after {max_retries} attempts. Please ensure it is connected.
                            Compatible devices are: {', '.join([d.get_device_name() for d in self.device_managers])}''')
 
             sys.exit(101)
